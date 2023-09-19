@@ -1,0 +1,433 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.6;
+
+//*Template Get API Datos Latenci y CVSS** 
+
+import "@chainlink/contracts/src/v0.8/AutomationCompatible.sol";
+import "@chainlink/contracts/src/v0.8/ChainlinkClient.sol";
+import "@chainlink/contracts/src/v0.8/ConfirmedOwner.sol";
+import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/utils/Strings.sol";
+import "@openzeppelin/contracts/utils/structs/EnumerableMap.sol";
+
+
+contract TFMTemplate5 is AutomationCompatibleInterface, ChainlinkClient, ConfirmedOwner, Pausable {
+    
+    using Chainlink for Chainlink.Request;
+    using SafeMath for uint256;             //Calculos seguros matematicos.
+    using Strings for uint256;              //Conversiones de cadena texto a enteros.
+    using EnumerableSet for EnumerableSet.UintSet;   
+
+    bytes32 private jobId;           //Identificador del job para leer todo los datos del api excepto total host.
+    bytes32 private jobId2;          //Identificado del job para leer los totalhost
+    uint256 private fee;              //variable de Tarifa a pagar al oraculo
+    uint256 private precision;      //var que se utiliza para ajusta los resultado con decimales y convertilos a enteros    string private apipos;          //variable que asigna poscion del arreglo del api para la cantidad de host host1, host2...
+    
+    string private apipos;
+    string private apihostid;        //guarda cadena de texto para la request API .
+    string private apilatency_ms;   //guarda cadena de texto para la request API. 
+    string private apitimemachine;  //guarda cadena de texto para la request API.
+    string private apicvss;          //guarda cadena de texto para la request API.
+    string private apitotalhost;   //guarda cadena de texto para la request API.
+
+    uint256 private IntervaloLecturas;     //Intervalo lecturas del Oraculo.
+    uint256 private lastTimeStamp;      //Marca de tiempo para el keeper
+    uint256 private DuracionContrato;    //Tiempo que funcionara el contrato.
+    uint256 private LatObjetivo;        //Valor objetivo a medir en milisegundos.
+    uint256 private CVSSObjetivo;        //Valor objetivo a medir en CVSS.
+    uint256 private SLAobjetivoLat;         //Porcentaje objetivo global del contrato Latencia SLO.
+    uint256 private SLAobjetivoCvss;         //Porcentaje objetivo global del contrato CVSS sLO.
+    
+
+    uint256 public totalhost;        //Devuelve la cantidad total de host monitoriados actualmente
+    uint256 public CounterKeeper;          //Contador de llamadas al Keeper.
+    uint256 public startTimeStamp;    //Tiempo que inicia el contrato  para calcular la terminacion       
+    uint256 public SliLatGlobal;    //Resulatdo global calculado para SLI latencias
+    uint256 public SliCvssGlobal;    //Resultado global calculado para  SLI Cvss
+    uint256 public  immutable ServiceCost;    //Costo de servicio establecido
+    uint256 public  PenaltyCost;              //calcula el porcentaje de pago del cliente
+    uint256 internal immutable Penalty ;     //Porcentaje de compensacion sobrw el costo de servicio pagado al iniciar el contrato
+
+    address payable contractAddr;                  //direcion del Contrato creado
+    address payable immutable proveedoraddress;   //direccion del proveedor
+    address payable immutable clienteaddress;     //direccion del cliente
+   
+    
+    
+    //Estructura que guardo los datos recibidos del api para cada host
+    struct HostInfo {
+        uint256[] latency;
+        uint256[] timeMachine;
+        uint256[] cvss;
+        uint256 hostidResponse;
+    }
+    mapping(uint256 => HostInfo) private hostInfoMap;  //Asocia identificador unico de hostid a la estrucra por cada host
+    
+    EnumerableSet.UintSet private hostIds; //facilita iterar sobre la estructura y crea las llave unicas de hostid
+
+    //Estructura que guarda los calculos de SLI para  latencia de cada host 
+    struct SLILatResult {
+        uint256 hostid;
+        uint256 sliLat;
+    }
+    //Estructura que guarda los calculos de SLI para CVSS  de cada host 
+    struct SLICvssResult {
+        uint256 hostid;
+        uint256 slicvss;
+    }
+    
+    //Estructura para el estado del contrato
+    enum ESTADOCONTRATO {  //identificafo de estado del contrato
+        SUSPENDIDO,
+        ACTIVO,
+        FIN
+    }
+    ESTADOCONTRATO public EstadoContrato; //Vuelve visible el estado el contrato 0 para suspendido, 1 para activo, 2 para fin
+ 
+    //Generados de eventos que devuelve contenido de variables en respueta a la solicitud del job 1 del oraculo
+    event RequestMultipleFulfilled(
+        bytes32 indexed requestId,
+        uint256 hostid,
+        uint256 latency,
+        uint256 timemachine,
+        uint256 cvss
+    );
+
+     //Generados de eventos que devuelve contenido de variables en respueta a la solicitud del job 2 del oraculo
+    event RequestMultipleFulfilled2(
+        bytes32 indexed requestId,
+        uint256 totalhost
+    );    
+
+    //Generados de eventos que devuelve contenido de variables en respuesta la funcion de CompensaSLA
+    event EventoPago(address receptor, 
+        uint256 _SLI, 
+        uint256 _SLICVSS, 
+        uint256 _pago,
+        string _mensaje
+    );
+ 
+
+    constructor (uint _DuracionContrato, uint _IntervaloLecturas, uint _LatObjetivo, uint _CVSSObjetivo, uint256 _SLAObjetivoLat ,uint256 _SLAObjetivoCvss,uint _CostoServicio, address _ClienteAddress, address _ProveedorAddress) ConfirmedOwner(msg.sender) payable {
+        startTimeStamp = 0;
+        lastTimeStamp = block.timestamp;
+        CounterKeeper = 0;
+        IntervaloLecturas = _IntervaloLecturas;
+        DuracionContrato = _DuracionContrato;
+        LatObjetivo= _LatObjetivo;            //guarda lat maxima soportada ejem 300ms
+        CVSSObjetivo= _CVSSObjetivo;           //guarda cvss maximo soportado ejem 7.5
+        SLAobjetivoLat= _SLAObjetivoLat;         //guarda porcentaje objetivo global del contrato SLO Latencia ejem. 99%.
+        SLAobjetivoCvss= _SLAObjetivoCvss;         //guarda porcentaje objetivo global del contrato SLO Cvss ejem. 98%.
+        precision = 10**2;   //Fija a 2 Decimales la conversion a enteros en los resultados matematicos 
+        
+        clienteaddress = payable(_ClienteAddress);
+        contractAddr = payable(address(this));
+        proveedoraddress = payable(_ProveedorAddress);
+        EstadoContrato = ESTADOCONTRATO.SUSPENDIDO;   
+        ServiceCost=  _CostoServicio * 10**16;  //indica q partir de 0.00 Ether Ejemplo 0.01 Ether = 10 Finney = 10000000 Gwei = 10000000000000000 Wei establece el Costo del servicio para el cliente.
+        Penalty = 10;       //Establece el 10% porcentaje de compensacion sobre el costo de servicio
+         
+        //Variable que Establecen strings que formulan solicitud URL al API
+        apipos= "0";  
+        apihostid= "hostid" ;
+        apilatency_ms= "latency_ms";
+        apitimemachine= "timemachine";
+        apicvss= "cvss";
+        apitotalhost= "totalhost";
+
+        setChainlinkToken(0x779877A7B0D9E8603169DdbD7836e478b4624789); //Sepolia link token Address
+        setChainlinkOracle(0x6a14ecA5c1A5A69C97F5F43ad5888a0A35F575F8); //Oraculo personalizado Address
+        jobId = "1069e356cd59406782d377eb9f80a25b"; //job  lee todo los valores
+        jobId2 = "3fba2d0e819748fb9e49627f1364f594"; //job lee un valor en esta caso totalhost
+        
+        fee = (1 * LINK_DIVISIBILITY) / 10; // 0,1 * 100**18 (Varies by network and job)
+
+        //*****Valores pruebas******* 
+        //900      900 segundos = 15min duracion del contrato
+        //60      1 min intervalo lecturas
+        //400      latencia objetivo ms
+        //70      cvss objetivo 7.0
+        //9900      Sla Lat objetivo porcentaje
+        //9800      Sla cvss objetivo porcentaje
+        // 1        es igual 10 finney = 0.01 ether  costo de servicio
+        //  0x08aDFD2af81BCAac9B3b6f96b74C3E5A8556D806   cliente   address
+        //  0x7eb4Af6F87d0bDaD7501954dc5507c808b8F5C82   proveedor address
+        //Kepper  gass limit set 1000000
+ 
+     
+    }
+  
+    function IniciarContrato() public payable{
+        LinkTokenInterface link = LinkTokenInterface(chainlinkTokenAddress()); //Interfaz para token Link
+        require(msg.sender == clienteaddress, "No es un cliente autorizado para inicar el Contrato" ) ;
+        require(EstadoContrato == ESTADOCONTRATO.SUSPENDIDO, "El contrato ya fue iniciado" );
+        require(link.balanceOf(address(this)) >= fee, "El contrato necesita Token LINK para poder leer datos del API");
+        require(msg.value >= ServiceCost, "Envie el costo de servicio acordado al contrato para poder iniciar");
+        EstadoContrato = ESTADOCONTRATO.ACTIVO;
+        startTimeStamp = block.timestamp;  //Configura el tiempo de inicio del contrato.
+        requestTotalHost();    //Inicia el calculo de los host totales al inicio del contrato demora como un minuto 30seg. 
+    }
+    
+    //Verifica que se cumpla el intevalo de tiempo antes de ejecutar el Keeper y el estado del contrato
+    function checkUpkeep(bytes calldata /* checkData */) external view override whenNotPaused returns (bool upkeepNeeded, bytes memory /*performData*/) {
+      upkeepNeeded = ((block.timestamp - lastTimeStamp) > IntervaloLecturas && EstadoContrato == ESTADOCONTRATO.ACTIVO);     
+    }
+
+ 
+    //Ejecuta logica del Keeper si se cumple el checkupkeep
+    function performUpkeep(bytes calldata /*performData*/ ) external override whenNotPaused  {
+        if ((block.timestamp - lastTimeStamp) > IntervaloLecturas ) {  //Se recomienda revalidar la llamada del checkupkeep siempre 
+            lastTimeStamp = block.timestamp; //Ajusta ultima marca de tiempo
+            CounterKeeper = CounterKeeper + 1;      //contador de ejecucciones del keeper  
+            requestApiData();  //Llama funcion que lee todos los datos
+            requestTotalHost(); //Llama funcion que lee datos de totalhost
+            if((block.timestamp - startTimeStamp) > DuracionContrato) { //Se ejecuta solo si termina el contrato
+                CompensaSLA(); // Ejecuta funcion de compensa
+            }
+        }
+    }
+
+    //Funcion que solicita al oraculo lectura del api para ver la cantidad de totalhost
+    function requestTotalHost() public { 
+        Chainlink.Request memory req = buildChainlinkRequest(jobId2,address(this),this.fulfillTotalHost.selector);        
+      
+        req.add("urlAPIDATA","http://tfmsg.ddns.net/api12.php");
+        string[] memory path5 = new string[](1);  
+        path5[0] = apitotalhost;     //Construye string para solicitud api del valor totalhost
+        req.addStringArray("pathAPIDATA", path5);
+        sendChainlinkRequest(req, fee); // envia solicitud
+    }
+    
+   //Funcion que recibe respuesta del oraculo para en la solicitud requestotalhost
+    function fulfillTotalHost(bytes32 requestId,uint256 totalhostResponse  ) public recordChainlinkFulfillment(requestId) {
+        emit RequestMultipleFulfilled2(requestId,totalhostResponse); //emite el evento de respuesta
+        totalhost = totalhostResponse; //guarda respuesta del api
+    }
+
+    //Funcion que solicita al oraculo lectura del api multiples valores
+    function requestMultipleParameters(string memory istring) public {
+        Chainlink.Request memory req = buildChainlinkRequest(jobId,address(this),this.fulfillMultipleParameters.selector);        
+    
+        req.add("urlHOSTID","http://tfmsg.ddns.net/api12.php");             //Url para el script que devuelve respuesta del api
+        string[] memory path1 = new string[](2);
+        path1[0] = istring;                                                 //recibe posicion para cada host en el arreglo originada de funcion requesdata para la cantida de totalhost
+        path1[1] = apihostid;
+        req.addStringArray("pathHOSTID", path1);
+    
+        req.add("urlLATENCY","http://tfmsg.ddns.net/api12.php");
+        string[] memory path2 = new string[](2);
+        path2[0] = istring;
+        path2[1] = apilatency_ms;
+        req.addStringArray("pathLATENCY", path2);
+        
+        req.add("urlTIMEMACHINE","http://tfmsg.ddns.net/api12.php");
+        string[] memory path3 = new string[](2);
+        path3[0] = istring;
+        path3[1] = apitimemachine;
+        req.addStringArray("pathTIMEMACHINE", path3);
+
+        req.add("urlCVSS","http://tfmsg.ddns.net/api12.php");
+        string[] memory path4 = new string[](2);
+        path4[0] = istring;
+        path4[1] = apicvss;
+        req.addStringArray("pathCVSS", path4);
+
+        sendChainlinkRequest(req, fee); //envia solitud
+    }
+
+    //Funcion que recibe respuesta del oraculo para en la soliciut requestMultipleParameters
+    function fulfillMultipleParameters(bytes32 requestId,uint256 hostidResponse,uint256 latencyResponse,uint256 timemachineResponse,uint256 cvssResponse) public recordChainlinkFulfillment(requestId) {
+        emit RequestMultipleFulfilled(requestId,hostidResponse,latencyResponse,timemachineResponse,cvssResponse);
+        saveHostInfo(hostidResponse,latencyResponse,timemachineResponse,cvssResponse ); //Funcion que guarda en estructura hostinfo
+        GetLatencySLIAll(); //Funcion que calcula el SLI actual para todos los host
+        GetCvssSLIAll();     //Funcion que calcula el SLI actual para todos los host   
+    }
+
+    //Funcion que recorre segun la cantidad de host en el api y llama requestMultipleParameters indicandole la posicion que debe leer con istring
+    function requestApiData() public {   
+        for (uint256 i = 0; i < totalhost; i++) {
+            string memory iString = i.toString();
+            requestMultipleParameters(iString);      
+        }
+    }
+
+    //Funcion que guarda en estructura hostinfo
+    function saveHostInfo(uint256 _hostidResponse, uint256 _latencyResponse, uint256 _timeMachineResponse, uint256 _cvssResponse) internal {
+        HostInfo storage hostInfo = hostInfoMap[_hostidResponse];
+        hostInfo.latency.push(_latencyResponse);
+        hostInfo.timeMachine.push(_timeMachineResponse);
+        hostInfo.cvss.push(_cvssResponse);
+        hostInfo.hostidResponse = _hostidResponse;
+        if (!hostIds.contains(_hostidResponse)) {
+            hostIds.add(_hostidResponse);
+        }
+    }
+
+    //Funcion que devuelve todos los hostid guardado en la estructura hostinfo
+    function getAllHostIds() public view returns (uint256[] memory) {
+        uint256[] memory result = new uint256[](hostIds.length());
+        for (uint256 i = 0; i < hostIds.length(); i++) {
+            result[i] = hostIds.at(i);
+        }
+        return result;
+    }
+
+    //Funcion que obtiene datos de un host especifico segun su hostid
+    function getHostInfo(uint256 _hostid) public view returns (uint256[] memory latencies, uint256[] memory timeMachines, uint256[] memory cvsss, uint256 hostid) {
+        HostInfo storage hostInfo = hostInfoMap[_hostid];
+        latencies = hostInfo.latency;
+        timeMachines = hostInfo.timeMachine;
+        cvsss = hostInfo.cvss;
+        hostid = hostInfo.hostidResponse;    
+    }
+
+
+    // Funciones de validar un calculo SLI de Lat para un host dado
+    function SLILatenHost(uint256 _hostid) public view returns (uint256) {
+        HostInfo storage hostInfo = hostInfoMap[_hostid];
+        uint256 totalRequests = hostInfo.latency.length;
+        uint256 goodLatencyRequests = 0;
+        uint256 badLatencyRequests = 0;      
+        for (uint256 i = 0; i < totalRequests; i++) {
+            if (hostInfo.latency[i] <= LatObjetivo) {
+                goodLatencyRequests++;
+            } else {
+                badLatencyRequests++;
+            }
+        }     
+        uint256 sliLatency = (goodLatencyRequests * 100) / totalRequests;
+        return sliLatency;
+    }
+
+    // Funciones de validar un calculo SLI de CVSS para un host dado
+    function SLICvssHost(uint256 _hostid) public view returns (uint256) {
+        HostInfo storage hostInfo = hostInfoMap[_hostid];
+        uint256 totalRequests = hostInfo.cvss.length;
+        uint256 goodCvssRequests = 0;
+        uint256 badCvssRequests = 0;
+        
+        for (uint256 i = 0; i < totalRequests; i++) {
+            if (hostInfo.cvss[i] <= CVSSObjetivo) {
+                goodCvssRequests++;
+            } else {
+                badCvssRequests++;
+            }
+        }
+        
+        uint256 sliCvss = (goodCvssRequests * 100) / totalRequests;
+        return sliCvss;
+    }
+
+    // Funcion Obtiene de SLI para todos los host para latencia
+    function GetLatencySLIAll() public returns (uint256[] memory) {
+        uint256[] memory sliLatencies = new uint256[](hostIds.length());       
+
+        for (uint256 i = 0; i < hostIds.length(); i++) {
+            uint256 hostId = hostIds.at(i);
+            HostInfo storage hostInfo = hostInfoMap[hostId];
+            uint256 totalRequests = hostInfo.latency.length;
+            uint256 goodLatencyRequests = 0;
+            uint256 badLatencyRequests = 0;
+            
+            for (uint256 j = 0; j < totalRequests; j++) {
+                if (hostInfo.latency[j] <= LatObjetivo) {
+                    goodLatencyRequests++;
+                } else {
+                    badLatencyRequests++;
+                }
+            }
+            
+            uint256 sliLatency = (goodLatencyRequests * 100) / totalRequests;
+            sliLatencies[i] = sliLatency;
+        }
+
+        
+        //Calcula el promedio de todos los SLI de latencia para todos los host
+        uint256 totalHostslat = sliLatencies.length;
+        uint256 sum = 0;
+        for (uint256 i = 0; i < totalHostslat; i++) {
+            sum = sum.add(sliLatencies[i]);
+        }
+        uint256 averageLSLI = (sum.mul(precision)).div(totalHostslat);
+        SliLatGlobal = averageLSLI;    
+        return sliLatencies;
+    }
+
+     ///Funcion Obtiene de SLI para todos los host para CVSS
+    function GetCvssSLIAll() public returns (uint256[] memory) {
+        uint256[] memory sliCvsss = new uint256[](hostIds.length());
+        
+        for (uint256 i = 0; i < hostIds.length(); i++) {
+            uint256 hostId = hostIds.at(i);
+            HostInfo storage hostInfo = hostInfoMap[hostId];
+            uint256 totalRequests = hostInfo.cvss.length;
+            uint256 goodCvssRequests = 0;
+            uint256 badCvssRequests = 0;
+            
+            for (uint256 j = 0; j < totalRequests; j++) {
+                if (hostInfo.cvss[j] <= CVSSObjetivo) {
+                    goodCvssRequests++;
+                } else {
+                    badCvssRequests++;
+                }
+            }          
+            uint256 sliCvss = (goodCvssRequests * 100) / totalRequests;
+            sliCvsss[i] = sliCvss;
+        }
+
+        //Calcula el promedio de todos los SLI de CVSS para todos los host
+        uint256 totalHostscvss = sliCvsss.length;
+        uint256 sum = 0;      
+       
+        for (uint256 i = 0; i < totalHostscvss; i++) {
+            sum = sum.add(sliCvsss[i]);
+        } 
+        uint256 averageCSLI = (sum.mul(precision)).div(totalHostscvss);
+        SliCvssGlobal = averageCSLI;
+        
+        return sliCvsss;
+    }
+    
+    // Funcion de compensacion 
+    function CompensaSLA() internal {
+        if((block.timestamp - startTimeStamp) > DuracionContrato) {
+          if(SLAobjetivoLat > SliLatGlobal || SLAobjetivoCvss > SliCvssGlobal) {    //si el SLAobjetivo es mayor que el SLI compensa al cliente
+              PenaltyCost = ((address(this).balance) * Penalty).div(100);    //Calcula el 10% del pago del total de fondos, utiliza SafeMath para garantizar que no haya desbordamiento o subdesbordamiento en la operación.
+              clienteaddress.transfer(PenaltyCost);              //Envia pago al cliente por incumplimiento SLA
+              emit EventoPago(clienteaddress, SliLatGlobal, SliCvssGlobal, PenaltyCost, "PagoClienteCompensa"); //emite evento con direccion del cliente, SLI y mensaje
+          }
+        
+        emit EventoPago(proveedoraddress, SliLatGlobal, SliCvssGlobal,  address(this).balance, "PagoProveedorFinContrato");  //emite evento con direccion del proveedor
+        proveedoraddress.transfer(address(this).balance); 
+        
+        EstadoContrato = ESTADOCONTRATO.FIN;
+        pause();  //pausa la ejecuccion del keeper
+ 
+        } 
+    }
+
+    //Permite editar la frecuencia de verificacion del Keeper
+    function SetIntervalo(uint _interval) public onlyOwner{
+       IntervaloLecturas = _interval;
+    }
+    //Permite enviar los link de este contrato al administrador de contratos
+    function withdrawLink() public onlyOwner {
+        LinkTokenInterface link = LinkTokenInterface(chainlinkTokenAddress());
+        require(link.transfer(msg.sender, link.balanceOf(address(this))), 'Unable to transfer');
+    }
+    //Permite ver link del contrato
+    function GetLinkBalance() public view returns(uint256){  //Obtiene balance de link del contrato
+       LinkTokenInterface link = LinkTokenInterface(chainlinkTokenAddress());
+       return link.balanceOf(address(this));
+    }
+    //Funcion para pausar los keeper
+    function pause() private { 
+       _pause();  
+    }
+    function unpause() external onlyOwner {
+       _unpause();
+       EstadoContrato = ESTADOCONTRATO.SUSPENDIDO;
+    }
+
+}
