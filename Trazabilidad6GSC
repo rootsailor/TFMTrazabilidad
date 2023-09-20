@@ -12,7 +12,7 @@ import "@openzeppelin/contracts/utils/Strings.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableMap.sol";
 
 
-contract TFMTemplate5 is AutomationCompatibleInterface, ChainlinkClient, ConfirmedOwner, Pausable {
+contract TFMFINAL is AutomationCompatibleInterface, ChainlinkClient, ConfirmedOwner, Pausable {
     
     using Chainlink for Chainlink.Request;
     using SafeMath for uint256;             //Calculos seguros matematicos.
@@ -20,9 +20,9 @@ contract TFMTemplate5 is AutomationCompatibleInterface, ChainlinkClient, Confirm
     using EnumerableSet for EnumerableSet.UintSet;   
 
     bytes32 private jobId;           //Identificador del job para leer todo los datos del api excepto total host.
-    bytes32 private jobId2;          //Identificado del job para leer los totalhost
+    bytes32 private jobId2;          //Identificador del job para leer los totalhost
     uint256 private fee;              //variable de Tarifa a pagar al oraculo
-    uint256 private precision;      //var que se utiliza para ajusta los resultado con decimales y convertilos a enteros    string private apipos;          //variable que asigna poscion del arreglo del api para la cantidad de host host1, host2...
+    uint256 private precision;      //variable que se utiliza para ajusta los resultado con decimales y convertirlos a enteros    string private apipos;          //variable que asigna poscion del arreglo del api para la cantidad de host host1, host2...
     
     string private apipos;
     string private apihostid;        //guarda cadena de texto para la request API .
@@ -40,7 +40,7 @@ contract TFMTemplate5 is AutomationCompatibleInterface, ChainlinkClient, Confirm
     uint256 private SLAobjetivoCvss;         //Porcentaje objetivo global del contrato CVSS sLO.
     
 
-    uint256 public totalhost;        //Devuelve la cantidad total de host monitoriados actualmente
+    uint256 public totalhost;        //Devuelve la cantidad total de host monitorizados actualmente
     uint256 public CounterKeeper;          //Contador de llamadas al Keeper.
     uint256 public startTimeStamp;    //Tiempo que inicia el contrato  para calcular la terminacion       
     uint256 public SliLatGlobal;    //Resulatdo global calculado para SLI latencias
@@ -94,13 +94,13 @@ contract TFMTemplate5 is AutomationCompatibleInterface, ChainlinkClient, Confirm
         uint256 cvss
     );
 
-     //Generados de eventos que devuelve contenido de variables en respueta a la solicitud del job 2 del oraculo
+     //Generador de eventos que devuelve contenido de variables en respuesta a la solicitud del job 2 del oraculo
     event RequestMultipleFulfilled2(
         bytes32 indexed requestId,
         uint256 totalhost
     );    
 
-    //Generados de eventos que devuelve contenido de variables en respuesta la funcion de CompensaSLA
+    //Generador de eventos que devuelve contenido de variables en respuesta la funcion de CompensaSLA
     event EventoPago(address receptor, 
         uint256 _SLI, 
         uint256 _SLICVSS, 
@@ -138,7 +138,7 @@ contract TFMTemplate5 is AutomationCompatibleInterface, ChainlinkClient, Confirm
 
         setChainlinkToken(0x779877A7B0D9E8603169DdbD7836e478b4624789); //Sepolia link token Address
         setChainlinkOracle(0x6a14ecA5c1A5A69C97F5F43ad5888a0A35F575F8); //Oraculo personalizado Address
-        jobId = "1069e356cd59406782d377eb9f80a25b"; //job  lee todo los valores
+        jobId = "c62eaae2191e42c5a070522eaf7776a4"; //job  lee todo los valores
         jobId2 = "3fba2d0e819748fb9e49627f1364f594"; //job lee un valor en esta caso totalhost
         
         fee = (1 * LINK_DIVISIBILITY) / 10; // 0,1 * 100**18 (Varies by network and job)
@@ -166,7 +166,7 @@ contract TFMTemplate5 is AutomationCompatibleInterface, ChainlinkClient, Confirm
         require(msg.value >= ServiceCost, "Envie el costo de servicio acordado al contrato para poder iniciar");
         EstadoContrato = ESTADOCONTRATO.ACTIVO;
         startTimeStamp = block.timestamp;  //Configura el tiempo de inicio del contrato.
-        requestTotalHost();    //Inicia el calculo de los host totales al inicio del contrato demora como un minuto 30seg. 
+       // requestTotalHost();    //Inicia el calculo de los host totales al inicio del contrato demora como un minuto 30seg. 
     }
     
     //Verifica que se cumpla el intevalo de tiempo antes de ejecutar el Keeper y el estado del contrato
@@ -199,7 +199,7 @@ contract TFMTemplate5 is AutomationCompatibleInterface, ChainlinkClient, Confirm
         sendChainlinkRequest(req, fee); // envia solicitud
     }
     
-   //Funcion que recibe respuesta del oraculo para en la solicitud requestotalhost
+   //Funcion que recibe respuesta del oraculo para en la soliciut requestotalhost
     function fulfillTotalHost(bytes32 requestId,uint256 totalhostResponse  ) public recordChainlinkFulfillment(requestId) {
         emit RequestMultipleFulfilled2(requestId,totalhostResponse); //emite el evento de respuesta
         totalhost = totalhostResponse; //guarda respuesta del api
@@ -392,17 +392,17 @@ contract TFMTemplate5 is AutomationCompatibleInterface, ChainlinkClient, Confirm
     // Funcion de compensacion 
     function CompensaSLA() internal {
         if((block.timestamp - startTimeStamp) > DuracionContrato) {
-          if(SLAobjetivoLat > SliLatGlobal || SLAobjetivoCvss > SliCvssGlobal) {    //si el SLAobjetivo es mayor que el SLI compensa al cliente
-              PenaltyCost = ((address(this).balance) * Penalty).div(100);    //Calcula el 10% del pago del total de fondos, utiliza SafeMath para garantizar que no haya desbordamiento o subdesbordamiento en la operación.
+          if(SLAobjetivoLat > SliLatGlobal || SLAobjetivoCvss > SliCvssGlobal) {  //si el SLAobjetivo es mayor que el SLI compensa al cliente
+              PenaltyCost = ((address(this).balance) * Penalty).div(100);    //Calcula el 10% del pago del total de fondos, utiliza SafeMath.
               clienteaddress.transfer(PenaltyCost);              //Envia pago al cliente por incumplimiento SLA
-              emit EventoPago(clienteaddress, SliLatGlobal, SliCvssGlobal, PenaltyCost, "PagoClienteCompensa"); //emite evento con direccion del cliente, SLI y mensaje
+              emit EventoPago(clienteaddress, SliLatGlobal, SliCvssGlobal, PenaltyCost, "PagoClienteCompensa"); //emite evento 
           }
         
-        emit EventoPago(proveedoraddress, SliLatGlobal, SliCvssGlobal,  address(this).balance, "PagoProveedorFinContrato");  //emite evento con direccion del proveedor
+        emit EventoPago(proveedoraddress, SliLatGlobal, SliCvssGlobal,  address(this).balance, "PagoProveedorFinContrato");  //emite evento 
         proveedoraddress.transfer(address(this).balance); 
         
         EstadoContrato = ESTADOCONTRATO.FIN;
-        pause();  //pausa la ejecuccion del keeper
+        pause();  //pausa la ejecuccion del Automation
  
         } 
     }
