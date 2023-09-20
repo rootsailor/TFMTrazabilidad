@@ -160,7 +160,7 @@ contract TFMFINAL is AutomationCompatibleInterface, ChainlinkClient, ConfirmedOw
   
     function IniciarContrato() public payable{
         LinkTokenInterface link = LinkTokenInterface(chainlinkTokenAddress()); //Interfaz para token Link
-        require(msg.sender == clienteaddress, "No es un cliente autorizado para inicar el Contrato" ) ;
+        require(msg.sender == clienteaddress, "No es un cliente autorizado para iniciar el Contrato" ) ;
         require(EstadoContrato == ESTADOCONTRATO.SUSPENDIDO, "El contrato ya fue iniciado" );
         require(link.balanceOf(address(this)) >= fee, "El contrato necesita Token LINK para poder leer datos del API");
         require(msg.value >= ServiceCost, "Envie el costo de servicio acordado al contrato para poder iniciar");
@@ -179,7 +179,7 @@ contract TFMFINAL is AutomationCompatibleInterface, ChainlinkClient, ConfirmedOw
     function performUpkeep(bytes calldata /*performData*/ ) external override whenNotPaused  {
         if ((block.timestamp - lastTimeStamp) > IntervaloLecturas ) {  //Se recomienda revalidar la llamada del checkupkeep siempre 
             lastTimeStamp = block.timestamp; //Ajusta ultima marca de tiempo
-            CounterKeeper = CounterKeeper + 1;      //contador de ejecucciones del keeper  
+            CounterKeeper = CounterKeeper + 1;      //contador de ejecuciones del keeper  
             requestApiData();  //Llama funcion que lee todos los datos
             requestTotalHost(); //Llama funcion que lee datos de totalhost
             if((block.timestamp - startTimeStamp) > DuracionContrato) { //Se ejecuta solo si termina el contrato
@@ -199,7 +199,7 @@ contract TFMFINAL is AutomationCompatibleInterface, ChainlinkClient, ConfirmedOw
         sendChainlinkRequest(req, fee); // envia solicitud
     }
     
-   //Funcion que recibe respuesta del oraculo para en la soliciut requestotalhost
+   //Funcion que recibe respuesta del oraculo para la solicitud requestotalhost
     function fulfillTotalHost(bytes32 requestId,uint256 totalhostResponse  ) public recordChainlinkFulfillment(requestId) {
         emit RequestMultipleFulfilled2(requestId,totalhostResponse); //emite el evento de respuesta
         totalhost = totalhostResponse; //guarda respuesta del api
