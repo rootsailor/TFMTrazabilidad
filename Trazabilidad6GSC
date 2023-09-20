@@ -169,7 +169,7 @@ contract TFMFINAL is AutomationCompatibleInterface, ChainlinkClient, ConfirmedOw
        // requestTotalHost();    //Inicia el calculo de los host totales al inicio del contrato demora como un minuto 30seg. 
     }
     
-    //Verifica que se cumpla el intevalo de tiempo antes de ejecutar el Keeper y el estado del contrato
+    //Verifica que se cumpla el intervalo de tiempo antes de ejecutar el Keeper y el estado del contrato
     function checkUpkeep(bytes calldata /* checkData */) external view override whenNotPaused returns (bool upkeepNeeded, bytes memory /*performData*/) {
       upkeepNeeded = ((block.timestamp - lastTimeStamp) > IntervaloLecturas && EstadoContrato == ESTADOCONTRATO.ACTIVO);     
     }
