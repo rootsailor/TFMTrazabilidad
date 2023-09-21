@@ -1,0 +1,51 @@
+type = "directrequest"
+schemaVersion = 1
+name = "Multi-Request-TFM(TOML)"
+externalJobID = "c62eaae2-191e-42c5-a070-522eaf7776a4"
+forwardingAllowed = false
+maxTaskDuration = "0s"
+contractAddress = "0x6a14ecA5c1A5A69C97F5F43ad5888a0A35F575F8"
+minContractPaymentLinkJuels = "0"
+observationSource = """
+decode_log [type="ethabidecodelog"
+abi="OracleRequest(bytes32 indexed specId, address requester, bytes32 requestId, uint256 payment, address callbackAddr, bytes4 callbackFunctionId, uint256 cancelExpiration, uint256 dataVersion, bytes data)"
+data="$(jobRun.logData)"
+topics="$(jobRun.logTopics)"]
+decode_cbor [type="cborparse" data="$(decode_log.data)"]
+decode_log -> decode_cbor
+decode_cbor -> hostid
+decode_cbor -> latency
+decode_cbor -> timemachine
+decode_cbor -> cvss
+hostid [type="http" method=GET url="$(decode_cbor.urlHOSTID)" allowunrestrictednetworkaccess="true"]
+hostid_parse [type="jsonparse" path="$(decode_cbor.pathHOSTID)" data="$(hostid)"]
+hostid_multiply [type="multiply" input="$(hostid_parse)", times="1"]
+hostid -> hostid_parse -> hostid_multiply
+latency [type="http" method=GET url="$(decode_cbor.urlLATENCY)" allowunrestrictednetworkaccess="true"]
+latency_parse [type="jsonparse" path="$(decode_cbor.pathLATENCY)" data="$(latency)"]
+latency_multiply [type="multiply" input="$(latency_parse)", times="100"]
+latency -> latency_parse -> latency_multiply
+timemachine [type="http" method=GET url="$(decode_cbor.urlTIMEMACHINE)" allowunrestrictednetworkaccess="true"]
+timemachine_parse [type="jsonparse" path="$(decode_cbor.pathTIMEMACHINE)" data="$(timemachine)"]
+timemachines_multiply [type="multiply" input="$(timemachine_parse)", times="1"]
+timemachine -> timemachine_parse -> timemachines_multiply
+cvss [type="http" method=GET url="$(decode_cbor.urlCVSS)" allowunrestrictednetworkaccess="true"]
+cvss_parse [type="jsonparse" path="$(decode_cbor.pathCVSS)" data="$(cvss)"]
+cvss_multiply [type="multiply" input="$(cvss_parse)", times="10"]
+cvss -> cvss_parse -> cvss_multiply
+hostid_multiply -> encode_mwr
+latency_multiply -> encode_mwr
+timemachines_multiply -> encode_mwr
+cvss_multiply -> encode_mwr
+// MWR API does NOT auto populate the requestID.
+encode_mwr [type="ethabiencode"
+abi="(bytes32 requestId, uint256 _hostid, uint256 _latency, uint256 _timemachines, uint256 _cvss)"
+data="{\\"requestId\\": $(decode_log.requestId), \\"_hostid\\": $(hostid_multiply), \\"_latency\\": $(latency_multiply), \\"_timemachines\\": $(timemachines_multiply), \\"_cvss\\": $(cvss_multiply)}"
+]
+encode_tx [type="ethabiencode"
+abi="fulfillOracleRequest2(bytes32 requestId, uint256 payment, address callbackAddress, bytes4 callbackFunctionId, uint256 expiration, bytes calldata data)"
+data="{\\"requestId\\": $(decode_log.requestId), \\"payment\\": $(decode_log.payment), \\"callbackAddress\\": $(decode_log.callbackAddr), \\"callbackFunctionId\\": $(decode_log.callbackFunctionId), \\"expiration\\": $(decode_log.cancelExpiration), \\"data\\": $(encode_mwr)}"
+]
+submit_tx [type="ethtx" to="0x6a14ecA5c1A5A69C97F5F43ad5888a0A35F575F8" data="$(encode_tx)"]
+encode_mwr -> encode_tx -> submit_tx
+"""
